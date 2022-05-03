@@ -1,0 +1,68 @@
+name: Analyze the Dockerfile, build (and publish) the Docker image
+
+on:
+  - push
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Analyze the Dockerfile
+        uses: hadolint/hadolint-action@v2.0.0
+        with:
+          dockerfile: Dockerfile
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    needs:
+      - analyze
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Build the Docker image
+        uses: docker/build-push-action@v2
+        with:
+          load: true
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Extract the kubectl version
+        run: |
+          KUBECTL_VERSION="$(docker run --rm "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" printenv KUBECTL_VERSION)"
+          echo "KUBECTL_VERSION=${KUBECTL_VERSION:?}" >> $GITHUB_ENV
+
+      - name: Extract labels and tags for Docker
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=true
+          tags: ${{ env.KUBECTL_VERSION }}
+
+      - name: Log in to the Container registry
+        if: contains(fromJson('["refs/heads/main", "refs/heads/master"]'), github.ref)
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: ${{ contains(fromJson('["refs/heads/main", "refs/heads/master"]'), github.ref) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
